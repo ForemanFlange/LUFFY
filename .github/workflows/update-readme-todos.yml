@@ -17,7 +17,7 @@ jobs:
           fetch-depth: 0
 
       - name: Fetch main branch
-        run: git fetch --no-tags --depth=1 origin main:refs/remotes/origin/main || true
+        run: git fetch --no-tags origin main:refs/remotes/origin/main || true
 
       - name: Regenerate complete TODO list
         run: |
@@ -54,28 +54,38 @@ jobs:
                       'msg': match.group('msg'),
                   })
 
-          changed_files = []
-          for diff_command in [
+          diff_commands = [
               ['git', 'diff', '--name-only', 'origin/main...HEAD'],
+              ['git', 'diff', '--name-only', 'origin/main', 'HEAD'],
+              ['git', 'show', '--pretty=format:', '--name-only', '7463fefd0f55ae2ba0b919e06527588022893495'],
               ['git', 'diff', '--name-only', 'HEAD~1..HEAD'],
-          ]:
+          ]
+
+          changed_files = []
+          for diff_command in diff_commands:
               result = subprocess.run(diff_command, text=True, capture_output=True)
-              if result.returncode == 0 and result.stdout.strip():
-                  changed_files = [
-                      line.strip().replace('\\', '/')
-                      for line in result.stdout.splitlines()
-                      if line.strip().endswith('.py')
-                  ]
-                  if changed_files:
-                      break
-          changed_files = sorted(set(changed_files))
+              print(f"DIFF_CMD={' '.join(diff_command)} RC={result.returncode}")
+              print(f"DIFF_STDOUT={result.stdout[:1200]!r}")
+              print(f"DIFF_STDERR={result.stderr[:500]!r}")
+              if result.returncode != 0:
+                  continue
+              files = [
+                  line.strip().replace('\\', '/')
+                  for line in result.stdout.splitlines()
+                  if line.strip().endswith('.py')
+              ]
+              if files:
+                  changed_files = sorted(set(files))
+                  break
           changed_set = set(changed_files)
+          print(f"CHANGED_PY_FILES={changed_files}")
 
           todo_re = re.compile(r'#\s*TODO\b\s*(?P<rest>.*?)\s*$', re.IGNORECASE)
 
           def parse_python_file(path_str):
               path = Path(path_str)
               if not path.is_file():
+                  print(f"MISSING_PY_FILE={path_str}")
                   return []
               parsed = []
               with path.open('r', encoding='utf-8', errors='replace') as handle:
@@ -98,6 +108,7 @@ jobs:
               for path in Path('.').rglob('*.py')
               if '.git' not in path.parts
           )
+          print(f"PY_FILE_COUNT={len(python_files)}")
           parsed_by_file = {path: parse_python_file(path) for path in python_files}
 
           final_entries = [
@@ -106,7 +117,11 @@ jobs:
           ]
           changed_entries = []
           for path in changed_files:
-              changed_entries.extend(parsed_by_file.get(path, parse_python_file(path)))
+              parsed = parsed_by_file.get(path, parse_python_file(path))
+              print(f"PARSED_CHANGED_FILE={path} TODO_COUNT={len(parsed)}")
+              for entry in parsed:
+                  print(f"CHANGED_TODO {entry['path']}:{entry['line']} {entry['msg']}")
+              changed_entries.extend(parsed)
           final_entries.extend(changed_entries)
 
           seen = set()
@@ -128,10 +143,8 @@ jobs:
           if new_text != text:
               readme.write_text(new_text, encoding='utf-8')
 
-          print('changed_python_files=' + ','.join(changed_files))
           print(f'todo_count_before={len(baseline_entries)} todo_count_after={len(unique_entries)}')
-          for entry in changed_entries:
-              print(f"CHANGED_TODO {entry['path']}:{entry['line']} {entry['msg']}")
+          print(f"README_WOULD_CHANGE={new_text != text}")
           PY
 
       - name: Commit README update
